@@ -71,6 +71,14 @@ public final class TexturePeakModule implements PeakModule, Listener, CommandExe
             command.setExecutor(this);
             command.setTabCompleter(this);
         }
+        if (context.web().enabled()) {
+            try (java.io.InputStream in = TexturePeakModule.class.getResourceAsStream("/modules/texturepeak/panel.js")) {
+                if (in == null) throw new IOException("panel.js fehlt im Jar");
+                new TextureWeb(context.web(), () -> store, TexturePeakModule::isItemType).register(new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
+            } catch (IOException e) {
+                context.logger().warning("Web-Seite von TexturePeak nicht verfuegbar: " + e.getMessage());
+            }
+        }
         context.logger().info(store.entries().size() + " Texturen-Eintraege geladen (" + store.archive().size() + " im Archiv).");
     }
 

@@ -24,3 +24,6 @@ Befehle: `/texturepeak ability <kennung> list | remove <nr> | add effect|particl
 Nicht geprueft: Partikel sichtbar, gehaltene Faehigkeiten (Haupt-/Nebenhand), Verhalten bei Tod/Weltwechsel, `/texturepeak apply` im Spiel.
 
 Grenzen: Effekte werden jede Sekunde erneuert und laufen 2 Sekunden nach dem Ablegen aus; Werte sind fluechtig (nicht gespeichert); nur Partikel ohne Zusatzdaten (z. B. flame, heart, kein dust).
+
+## Phase 17: Web-Seite "Texturen"
+Pixel-Editor, Eintraege, Archiv, Faehigkeiten, Duplizieren ueber /api/texturepeak (siehe PeakCore/docs/TESTS.md, Phase 16/17). Eingaben werden serverseitig mit TextureCheck und AbilityRunner.check geprueft; Fehler kommen als Meldung in der Oberflaeche an.

@@ -38,7 +38,16 @@ public final class EntryStore {
     private Path entriesFile() { return folder.resolve("entries.json"); }
     private Path archiveFile() { return folder.resolve("archive.json"); }
     public Path texture(String id) { return folder.resolve("textures").resolve(id + ".png"); }
-    private Path archivedTexture(String id) { return folder.resolve("archive").resolve(id + ".png"); }
+    public Path archivedTexture(String id) { return folder.resolve("archive").resolve(id + ".png"); }
+
+    /** Ersetzt die Textur eines aktiven Eintrags (die Pruefung des PNG macht der Aufrufer). */
+    public void replaceTexture(String id, byte[] png) throws IOException {
+        if (!active.containsKey(id)) throw new IllegalArgumentException("Kein Eintrag '" + id + "'.");
+        Files.createDirectories(texture(id).getParent());
+        Path tmp = texture(id).resolveSibling(id + ".png.tmp");
+        Files.write(tmp, png);
+        Files.move(tmp, texture(id), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+    }
 
     /** Laedt beide Dateien. Eine kaputte Datei wird als {@code .kaputt} aufgehoben und ersetzt, damit der Server trotzdem startet. */
     public void load() throws IOException {
