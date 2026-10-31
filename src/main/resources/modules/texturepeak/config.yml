@@ -1,0 +1,2 @@
+# Standard-Config des Moduls TexturePeak (wird nach plugins/TexturePeak/config.yml kopiert, falls dort noch keine liegt)
+# Die Eintraege (Regeln) liegen in entries.json, geloeschte in archive.json; verwaltet per /texturepeak.
