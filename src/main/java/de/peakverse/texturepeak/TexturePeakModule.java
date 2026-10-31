@@ -12,6 +12,8 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Locale;
 import net.kyori.adventure.text.Component;
+import net.kyori.adventure.text.event.ClickEvent;
+import net.kyori.adventure.text.event.HoverEvent;
 import net.kyori.adventure.text.format.NamedTextColor;
 import org.bukkit.Material;
 import org.bukkit.NamespacedKey;
@@ -180,8 +182,15 @@ public final class TexturePeakModule implements PeakModule, Listener, CommandExe
             msg(who, "Noch keine Eintraege. Textur als plugins/TexturePeak/import/<kennung>.png ablegen, dann /texturepeak add <kennung> <ITEM_TYP> <name>.", NamedTextColor.GRAY);
             return;
         }
-        msg(who, entries.size() + " Eintraege:", NamedTextColor.GOLD);
-        for (Entry e : entries) msg(who, " " + e.id + "  " + e.material + "  \"" + e.name + "\"" + (e.enabled ? "" : "  (aus)"), NamedTextColor.WHITE);
+        msg(who, entries.size() + " Eintraege (anklicken: Gegenstand in der Hand markieren):", NamedTextColor.GOLD);
+        for (Entry e : entries) {
+            Component line = Component.text(" " + e.id + "  " + e.material + "  \"" + e.name + "\"" + (e.enabled ? "" : "  (aus)"), NamedTextColor.WHITE)
+                    .clickEvent(ClickEvent.suggestCommand("/texturepeak apply " + e.id))
+                    .hoverEvent(HoverEvent.showText(Component.text("Klicken: /texturepeak apply " + e.id)));
+            if (who instanceof Player) line = line.append(Component.text("  [ins Archiv]", NamedTextColor.RED).clickEvent(ClickEvent.suggestCommand("/texturepeak remove " + e.id)));
+            who.sendMessage(line);
+        }
+        msg(who, "Mehr Moeglichkeiten in der Web-Oberflaeche: /peakcore web", NamedTextColor.DARK_GRAY);
     }
 
     private void archive(CommandSender who) {
@@ -191,7 +200,11 @@ public final class TexturePeakModule implements PeakModule, Listener, CommandExe
             return;
         }
         msg(who, entries.size() + " Archiv-Eintraege (zurueckholen mit /texturepeak restore <kennung>):", NamedTextColor.GOLD);
-        for (Entry e : entries) msg(who, " " + e.id + "  " + e.material + "  \"" + e.name + "\"", NamedTextColor.WHITE);
+        for (Entry e : entries) {
+            who.sendMessage(Component.text(" " + e.id + "  " + e.material + "  \"" + e.name + "\"", NamedTextColor.WHITE)
+                    .append(Component.text("  [zurueckholen]", NamedTextColor.GREEN).clickEvent(ClickEvent.runCommand("/texturepeak restore " + e.id))
+                            .hoverEvent(HoverEvent.showText(Component.text("Eintrag " + e.id + " wiederherstellen")))));
+        }
     }
 
     private void add(CommandSender who, String[] args) throws IOException {
