@@ -33,11 +33,13 @@ import org.bukkit.persistence.PersistentDataType;
  * (Item-Modell {@code texturepeak:<id>}) und die Pack-Dateien dazu. Verwaltet wird vorerst per {@code /texturepeak}; die Web-Oberflaeche folgt spaeter.
  */
 public final class TexturePeakModule implements PeakModule, Listener, CommandExecutor, TabCompleter {
-    private static final List<String> SUBS = List.of("list", "add", "remove", "archive", "restore", "apply", "check", "reload");
+    private static final List<String> SUBS = List.of("list", "add", "remove", "archive", "restore", "apply", "check", "ability", "reload");
 
     private ModuleContext context;
     private EntryStore store;
     private NamespacedKey markerKey;
+    private AbilityRunner runner;
+    private org.bukkit.scheduler.BukkitTask task;
 
     @Override
     public String id() {
@@ -62,6 +64,8 @@ public final class TexturePeakModule implements PeakModule, Listener, CommandExe
             throw new IllegalStateException("Eintraege konnten nicht geladen werden: " + e.getMessage(), e);
         }
         context.host().getServer().getPluginManager().registerEvents(this, context.host());
+        runner = new AbilityRunner(store, this::markedId);
+        task = context.host().getServer().getScheduler().runTaskTimer(context.host(), runner::tick, 20L, 20L);
         PluginCommand command = context.host().getCommand("texturepeak");
         if (command != null) {
             command.setExecutor(this);
@@ -77,6 +81,10 @@ public final class TexturePeakModule implements PeakModule, Listener, CommandExe
 
     @Override
     public void disable() {
+        if (task != null) task.cancel();
+        task = null;
+        if (runner != null) runner.shutdown();
+        runner = null;
         if (context != null) {
             org.bukkit.event.HandlerList.unregisterAll(this);
             PluginCommand command = context.host().getCommand("texturepeak");
@@ -100,6 +108,17 @@ public final class TexturePeakModule implements PeakModule, Listener, CommandExe
         meta.getPersistentDataContainer().set(markerKey, PersistentDataType.STRING, entry.id);
         item.setItemMeta(meta);
         return true;
+    }
+
+    /** Die Eintrags-Kennung, mit der ein Gegenstand markiert ist, oder {@code null}. */
+    String markedId(ItemStack item) {
+        if (item == null || !item.hasItemMeta()) return null;
+        return item.getItemMeta().getPersistentDataContainer().get(markerKey, PersistentDataType.STRING);
+    }
+
+    @EventHandler
+    public void onQuit(org.bukkit.event.player.PlayerQuitEvent event) {
+        if (runner != null) runner.forget(event.getPlayer());
     }
 
     /** Beim Umbenennen am Amboss: passt Typ und neuer Name zu einer Regel, bekommt das Ergebnis die Textur. */
@@ -131,6 +150,7 @@ public final class TexturePeakModule implements PeakModule, Listener, CommandExe
                 case "restore" -> restore(who, args);
                 case "apply" -> apply(who, args);
                 case "check" -> check(who, args);
+                case "ability" -> ability(who, args);
                 case "reload" -> reload(who);
                 default -> msg(who, "Benutzung: /texturepeak <list|add <kennung> <ITEM_TYP> <name...>|remove <kennung>|archive|restore <kennung>|apply <kennung>|check <kennung>|reload>", NamedTextColor.RED);
             }
@@ -215,6 +235,72 @@ public final class TexturePeakModule implements PeakModule, Listener, CommandExe
         msg(who, errors.isEmpty() ? "Eintrag '" + e.id + "' ist in Ordnung." : String.join("\n", errors), errors.isEmpty() ? NamedTextColor.GREEN : NamedTextColor.RED);
     }
 
+    private static final String ABILITY_USAGE = "Benutzung: /texturepeak ability <kennung> <list | remove <nr> | add effect <worn|held> <name> [stufe] | add particle <worn|held> <name> [anzahl] | add attribute <worn|held> <name> <wert> [add|multiply]>";
+
+    private void ability(CommandSender who, String[] args) throws IOException {
+        if (args.length < 3) throw new IllegalArgumentException(ABILITY_USAGE);
+        Entry e = store.get(args[1].toLowerCase(Locale.ROOT));
+        if (e == null) throw new IllegalArgumentException("Kein Eintrag " + args[1] + ".");
+        switch (args[2].toLowerCase(Locale.ROOT)) {
+            case "list" -> {
+                if (e.abilities.isEmpty()) msg(who, "'" + e.id + "' hat keine Faehigkeiten.", NamedTextColor.GRAY);
+                for (int i = 0; i < e.abilities.size(); i++) msg(who, " " + (i + 1) + ". " + e.abilities.get(i).describe(), NamedTextColor.WHITE);
+            }
+            case "remove" -> {
+                if (args.length < 4) throw new IllegalArgumentException(ABILITY_USAGE);
+                Ability a = store.removeAbility(e.id, parseInt(args[3], "Nummer"));
+                msg(who, "Entfernt: " + a.describe(), NamedTextColor.GREEN);
+            }
+            case "add" -> {
+                Ability a = parseAbility(args);
+                List<String> errors = AbilityRunner.check(a);
+                if (!errors.isEmpty()) throw new IllegalArgumentException(String.join("\n", errors));
+                store.addAbility(e.id, a);
+                msg(who, "Hinzugefuegt: " + a.describe() + ". Wirkt bei Spielern, die den markierten Gegenstand " + (a.when == Ability.When.WORN ? "tragen" : "halten") + ".", NamedTextColor.GREEN);
+            }
+            default -> throw new IllegalArgumentException(ABILITY_USAGE);
+        }
+    }
+
+    private static Ability parseAbility(String[] args) {
+        if (args.length < 6) throw new IllegalArgumentException(ABILITY_USAGE);
+        Ability.Kind kind;
+        try {
+            kind = Ability.Kind.valueOf(args[3].toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException ex) {
+            throw new IllegalArgumentException(ABILITY_USAGE);
+        }
+        Ability.When when;
+        try {
+            when = Ability.When.valueOf(args[4].toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException ex) {
+            throw new IllegalArgumentException("'" + args[4] + "' ist weder worn (getragen) noch held (gehalten).");
+        }
+        String name = Ability.normalize(args[5]);
+        if (kind == Ability.Kind.ATTRIBUTE) {
+            if (args.length < 7) throw new IllegalArgumentException(ABILITY_USAGE);
+            double amount;
+            try {
+                amount = Double.parseDouble(args[6]);
+            } catch (NumberFormatException ex) {
+                throw new IllegalArgumentException("Kein Wert: " + args[6]);
+            }
+            boolean multiply = args.length > 7 && args[7].equalsIgnoreCase("multiply");
+            if (args.length > 7 && !multiply && !args[7].equalsIgnoreCase("add")) throw new IllegalArgumentException("Art muss add oder multiply sein.");
+            return new Ability(kind, when, name, 1, amount, multiply);
+        }
+        int level = args.length > 6 ? parseInt(args[6], kind == Ability.Kind.EFFECT ? "Stufe" : "Anzahl") : 1;
+        return new Ability(kind, when, name, level, 0, false);
+    }
+
+    private static int parseInt(String s, String what) {
+        try {
+            return Integer.parseInt(s);
+        } catch (NumberFormatException ex) {
+            throw new IllegalArgumentException("Keine Zahl fuer " + what + ": " + s);
+        }
+    }
+
     private void reload(CommandSender who) throws IOException {
         context.reloadConfig();
         store.load();
@@ -245,7 +331,7 @@ public final class TexturePeakModule implements PeakModule, Listener, CommandExe
         if (args.length == 1) return SUBS.stream().filter(s -> s.startsWith(prefix)).toList();
         if (args.length == 2) {
             return switch (args[0].toLowerCase(Locale.ROOT)) {
-                case "remove", "apply", "check" -> store.entries().stream().map(e -> e.id).filter(s -> s.startsWith(prefix)).toList();
+                case "remove", "apply", "check", "ability" -> store.entries().stream().map(e -> e.id).filter(s -> s.startsWith(prefix)).toList();
                 case "restore" -> store.archive().stream().map(e -> e.id).filter(s -> s.startsWith(prefix)).toList();
                 default -> List.of();
             };

@@ -23,6 +23,8 @@ public final class EntryStore {
     private static final Gson GSON = new GsonBuilder().setPrettyPrinting().create();
     private static final java.lang.reflect.Type LIST = new TypeToken<List<Entry>>() {}.getType();
 
+    public static final int MAX_ABILITIES = 8;
+
     private final Path folder;
     private final LongSupplier clock;
     private final Map<String, Entry> active = new LinkedHashMap<>();
@@ -50,7 +52,15 @@ public final class EntryStore {
         if (!Files.isRegularFile(file)) return List.of();
         try {
             List<Entry> list = GSON.fromJson(Files.readString(file, StandardCharsets.UTF_8), LIST);
-            return list == null ? List.of() : list.stream().filter(e -> e != null && e.id != null && e.material != null && e.name != null).toList();
+            if (list == null) return List.of();
+            List<Entry> ok = new ArrayList<>();
+            for (Entry e : list) {
+                if (e == null || e.id == null || e.material == null || e.name == null) continue;
+                if (e.abilities == null) e.abilities = new ArrayList<>();
+                e.abilities.removeIf(java.util.Objects::isNull);
+                ok.add(e);
+            }
+            return ok;
         } catch (RuntimeException e) {
             Files.move(file, file.resolveSibling(file.getFileName() + ".kaputt"), StandardCopyOption.REPLACE_EXISTING);
             return List.of();
@@ -137,6 +147,29 @@ public final class EntryStore {
         Files.move(archivedTexture(id), texture(id), StandardCopyOption.REPLACE_EXISTING);
         active.put(id, e);
         save();
+        return e;
+    }
+
+    /** Haengt eine (bereits gepruefte) Faehigkeit an. Hoechstens {@value #MAX_ABILITIES} je Eintrag. */
+    public void addAbility(String id, Ability ability) throws IOException {
+        Entry e = require(id);
+        if (e.abilities.size() >= MAX_ABILITIES) throw new IllegalArgumentException("Hoechstens " + MAX_ABILITIES + " Faehigkeiten je Eintrag.");
+        e.abilities.add(ability);
+        save();
+    }
+
+    /** @param number Nummer ab 1, wie in der Anzeige */
+    public Ability removeAbility(String id, int number) throws IOException {
+        Entry e = require(id);
+        if (number < 1 || number > e.abilities.size()) throw new IllegalArgumentException("Keine Faehigkeit Nr. " + number + " bei " + id + ".");
+        Ability a = e.abilities.remove(number - 1);
+        save();
+        return a;
+    }
+
+    private Entry require(String id) {
+        Entry e = active.get(id);
+        if (e == null) throw new IllegalArgumentException("Kein Eintrag " + id + ".");
         return e;
     }
 

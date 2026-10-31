@@ -12,6 +12,8 @@ public final class Entry {
     /** Anzeigename des Gegenstands ohne Formatierung. */
     public String name;
     public boolean enabled = true;
+    /** Faehigkeiten (leer = nur Optik). Fehlt das Feld in einer alten Datei, ist die Liste leer. */
+    public java.util.List<Ability> abilities = new java.util.ArrayList<>();
     public long createdAt;
     /** Nur im Archiv: wann der Eintrag geloescht wurde. */
     public long archivedAt;
