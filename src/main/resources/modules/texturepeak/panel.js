@@ -77,7 +77,7 @@ export default async function mount(root, ctx) {
 
   function newEntryForm(toBlob) {
     const id = h('input', { placeholder: 'kennung_klein' }), name = h('input', { placeholder: L('Name im Spiel (Amboss)', 'Name in game (anvil)') });
-    const mat = h('input', { placeholder: 'DIAMOND_HELMET', list: 'mats' });
+    const mat = h('input', { placeholder: 'DIAMOND_HELMET', list: 'mats', value: editor.material || '' });
     return h('div', {}, h('datalist', { id: 'mats' }, meta.materials.map(m => h('option', { value: m }))),
       h('label', {}, L('Kennung', 'Id')), id, h('label', {}, L('Gegenstand', 'Item type')), mat, h('label', {}, L('Name', 'Name')), name,
       h('div', { class: 'row', style: 'margin-top:12px' }, h('button', { class: 'px-btn primary', onclick: async () => {
@@ -98,6 +98,105 @@ export default async function mount(root, ctx) {
     try { await img.decode(); } catch { ctx.toast(L('Kein Bild', 'Not an image'), 'bad'); return; }
     if (![16, 32, 64, 128, 256, 512].includes(img.naturalWidth) || img.naturalWidth !== img.naturalHeight) { ctx.toast(L('Das Bild muss quadratisch sein: 16, 32, 64, 128, 256 oder 512 Pixel.', 'The image must be square: 16, 32, 64, 128, 256 or 512 px.'), 'bad'); return; }
     editor = newEditor(img.naturalWidth, img); render();
+  }
+
+  // ---------- Standard-Texturen (Auswahl per Vorschaubild) ----------
+  const vurl = (kind, name) => '/api/texturepeak/vanilla/' + kind + '/' + name;
+  const pretty = n => n.replace(/_/g, ' ');
+  let van = null, vanSearch = '', vanKind = 'all', vanPick = null, vanPoll = null;
+
+  async function loadVanilla() { van = await ctx.api('vanilla'); }
+  async function startDownload() {
+    try { van = await ctx.api('vanilla/download', { method: 'POST', body: '' }); } catch (e) { ctx.toast(e.message, 'bad'); return; }
+    clearInterval(vanPoll);
+    vanPoll = setInterval(async () => {
+      try { await loadVanilla(); } catch { return; }
+      if (!van.busy) { clearInterval(vanPoll); if (van.ready) ctx.toast(L('Standard-Texturen geladen', 'Default textures loaded'), 'good'); else if (van.error) ctx.toast(van.error, 'bad'); }
+      if (tab === 'vanilla' && !editor) render();
+    }, 2000);
+    render();
+  }
+
+  // erstes Bild einer (evtl. animierten, hochkant gestapelten) Textur als quadratisches Canvas
+  async function firstFrame(kind, name) {
+    const img = new Image(); img.src = vurl(kind, name); await img.decode();
+    const w = img.naturalWidth, c = document.createElement('canvas'); c.width = c.height = w;
+    const g = c.getContext('2d'); g.imageSmoothingEnabled = false; g.drawImage(img, 0, 0, w, w, 0, 0, w, w);
+    return c;
+  }
+  const canvasB64 = c => c.toDataURL('image/png').split(',')[1];
+
+  function vanillaView() {
+    if (!van) return h('div', { class: 'empty' }, '…');
+    if (!van.ready) {
+      return h('div', { class: 'card tp-pop' },
+        h('h2', { style: 'margin-top:0' }, L('Standard-Texturen laden', 'Load default textures')),
+        h('p', { class: 'sub' }, L('Damit du Gegenstaende und Bloecke per Vorschaubild auswaehlen kannst, holt der Server einmalig die Bilder deiner Spielversion (' + van.version + ') von den offiziellen Mojang-Servern. Sie werden nur auf deinem Server gespeichert und nicht weitergegeben.',
+          'To pick items and blocks by preview image, the server downloads the images of your game version (' + van.version + ') once from the official Mojang servers. They are stored on your server only and never redistributed.')),
+        van.error ? h('p', { style: 'color:var(--bad)' }, van.error) : null,
+        h('button', { class: 'px-btn primary', disabled: van.busy, onclick: startDownload }, van.busy ? L('Laedt …', 'Downloading …') : L('Jetzt herunterladen', 'Download now')));
+    }
+    const mats = new Set(meta.materials), q = vanSearch.trim().toLowerCase().replace(/ /g, '_');
+    const all = [];
+    for (const kind of ['item', 'block']) if (vanKind === 'all' || vanKind === kind) for (const n of van[kind]) if (mats.has(n.toUpperCase()) && (!q || n.includes(q))) all.push([kind, n]);
+    // gleicher Name als Item und Block nur einmal (das Item-Bild gewinnt)
+    const seen = new Set(), list = all.filter(([k, n]) => (seen.has(n) ? false : seen.add(n)));
+    const shown = list.slice(0, 300);
+    const search = h('input', { placeholder: L('Suchen, z. B. diamond oder sword', 'Search, e.g. diamond or sword'), value: vanSearch, style: 'max-width:340px',
+      oninput: ev => { vanSearch = ev.target.value; const pos = ev.target.selectionStart; render(); const i = root.querySelector('input[placeholder^="' + (L('Suchen', 'Search')) + '"]'); if (i) { i.focus(); i.setSelectionRange(pos, pos); } } });
+    return h('div', {},
+      h('div', { class: 'row', style: 'margin:14px 0' }, search,
+        [['all', L('Alle', 'All')], ['item', L('Gegenstaende', 'Items')], ['block', L('Bloecke', 'Blocks')]].map(([k, l]) => h('button', { class: 'px-btn small ' + (vanKind === k ? 'active' : ''), onclick: () => { vanKind = k; render(); } }, l)),
+        h('span', { class: 'sub' }, list.length + ' ' + L('Treffer', 'results') + (list.length > shown.length ? ' (' + L('die ersten', 'first') + ' ' + shown.length + ')' : ''))),
+      vanPick ? vanillaDetail(vanPick) : null,
+      shown.length ? h('div', { class: 'tp-vgrid' }, shown.map(([kind, n], i) => h('div', { class: 'tp-vtile' + (vanPick && vanPick.name === n ? ' sel' : ''), style: '--i:' + Math.min(i, 40), title: pretty(n), onclick: () => { vanPick = { kind, name: n }; render(); root.querySelector('.tp-vdetail')?.scrollIntoView({ behavior: 'smooth', block: 'nearest' }); } },
+        h('img', { src: vurl(kind, n), loading: 'lazy' }), h('div', { class: 'nm' }, pretty(n)))))
+        : h('div', { class: 'empty' }, L('Nichts gefunden.', 'Nothing found.')));
+  }
+
+  function vanillaDetail(p) {
+    const material = p.name.toUpperCase(), idIn = h('input', { placeholder: 'kennung_klein', value: 'mein_' + p.name.slice(0, 20) }), nameIn = h('input', { placeholder: L('Name im Spiel (Amboss)', 'Name in game (anvil)') });
+    return h('div', { class: 'card tp-vdetail tp-pop' },
+      h('div', { class: 'row' },
+        h('img', { src: vurl(p.kind, p.name), class: 'tp-vbig' }),
+        h('div', { class: 'grow' }, h('h2', { style: 'margin:0' }, pretty(p.name)), h('div', { class: 'sub' }, material), h('div', { class: 'sub' }, L('Was moechtest du damit tun?', 'What do you want to do with it?'))),
+        h('button', { class: 'px-btn small ghost', onclick: () => { vanPick = null; render(); } }, '×')),
+      h('div', { class: 'tp-choice' },
+        h('div', { class: 'tp-opt' }, h('h3', {}, '⧉ ' + L('Kopieren', 'Copy')), h('p', { class: 'sub' }, L('Neuer Eintrag mit genau dieser Textur. Danach kannst du Namen, Faehigkeiten und Bild frei aendern.', 'New entry with exactly this texture. Afterwards you can change name, abilities and image freely.')),
+          h('label', {}, L('Kennung', 'Id')), idIn, h('label', {}, L('Name', 'Name')), nameIn,
+          h('div', { class: 'row', style: 'margin-top:10px' }, h('button', { class: 'px-btn primary', onclick: async () => {
+            const c = await firstFrame(p.kind, p.name);
+            if (await call('entries', 'POST', { id: idIn.value, material, name: nameIn.value, png: canvasB64(c) }, L('Eintrag angelegt', 'Entry created'))) { open = idIn.value.trim().toLowerCase(); tab = 'entries'; vanPick = null; render(); }
+          } }, L('Kopie anlegen', 'Create copy')))),
+        h('div', { class: 'tp-opt' }, h('h3', {}, '✎ ' + L('Aendern', 'Modify')), h('p', { class: 'sub' }, L('Das Bild im Pixel-Editor oeffnen und veraendern, zum Beispiel umfaerben oder etwas dazumalen. Gespeichert wird als neuer Eintrag.', 'Open the image in the pixel editor and change it, for example recolor it or paint on it. It is saved as a new entry.')),
+          h('div', { class: 'row', style: 'margin-top:10px' }, h('button', { class: 'px-btn primary', onclick: async () => {
+            const c = await firstFrame(p.kind, p.name);
+            if (![16, 32, 64, 128, 256, 512].includes(c.width)) { ctx.toast(L('Diese Textur hat eine ungewoehnliche Groesse.', 'This texture has an unusual size.'), 'bad'); return; }
+            editor = newEditor(c.width, c); editor.material = material; tab = 'entries'; vanPick = null; render(); window.scrollTo({ top: 0, behavior: 'smooth' });
+          } }, L('Im Editor oeffnen', 'Open in editor'))))));
+  }
+
+  // Animationen und Aussehen dieser Seite
+  if (!document.getElementById('tp-style')) {
+    const st = document.createElement('style'); st.id = 'tp-style';
+    st.textContent = `
+.tp-vgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(104px,1fr));gap:10px;margin-top:10px}
+.tp-vtile{background:var(--panel);border:var(--px) solid var(--line);padding:8px;cursor:pointer;text-align:center;opacity:0;animation:tpin .35s ease-out forwards;animation-delay:calc(var(--i)*18ms);transition:transform .12s,border-color .12s,box-shadow .12s}
+.tp-vtile:hover{transform:translate(-2px,-4px) scale(1.04);border-color:var(--accent);box-shadow:4px 4px 0 var(--accent2)}
+.tp-vtile.sel{border-color:var(--accent);box-shadow:4px 4px 0 var(--accent2)}
+.tp-vtile img{width:64px;height:64px;object-fit:cover;object-position:top;aspect-ratio:1;image-rendering:pixelated;transition:transform .25s}
+.tp-vtile:hover img{transform:rotate(-6deg) scale(1.12)}
+.tp-vtile .nm{font-size:11px;margin-top:6px;word-break:break-word;color:var(--dim)}
+.tp-vbig{width:112px;height:112px;object-fit:cover;object-position:top;aspect-ratio:1;image-rendering:pixelated;animation:tpbig .45s cubic-bezier(.2,1.4,.4,1)}
+.tp-choice{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;margin-top:14px}
+.tp-opt{background:var(--panel2);border:var(--px) solid var(--line);padding:14px;transition:border-color .15s,transform .15s}
+.tp-opt:hover{border-color:var(--accent);transform:translateY(-2px)}
+.tp-pop{animation:tppop .3s ease-out}
+@keyframes tpin{from{opacity:0;transform:translateY(12px) scale(.9)}to{opacity:1;transform:none}}
+@keyframes tpbig{from{transform:scale(.3) rotate(-25deg);opacity:0}to{transform:none;opacity:1}}
+@keyframes tppop{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.tp-vtile,.tp-vbig,.tp-pop{animation:none;opacity:1}}`;
+    document.head.appendChild(st);
   }
 
   // ---------- Eintraege ----------
@@ -137,12 +236,13 @@ export default async function mount(root, ctx) {
       h('h1', {}, L('Texturen', 'Textures')),
       h('p', { class: 'sub' }, L('Gegenstand + Name am Amboss ergibt eine eigene Textur. Aenderungen bauen das Pack automatisch neu.', 'Item + anvil name gives a custom texture. Changes rebuild the pack automatically.')),
       h('div', { class: 'row' },
-        [['entries', L('Eintraege', 'Entries') + ' (' + entries.length + ')'], ['archive', L('Archiv', 'Archive') + ' (' + archive.length + ')']].map(([k, l]) => h('button', { class: 'px-btn ' + (tab === k ? 'active' : ''), onclick: () => { tab = k; open = null; render(); } }, l)),
+        [['entries', L('Eintraege', 'Entries') + ' (' + entries.length + ')'], ['vanilla', L('Standard-Texturen', 'Default textures')], ['archive', L('Archiv', 'Archive') + ' (' + archive.length + ')']].map(([k, l]) => h('button', { class: 'px-btn ' + (tab === k ? 'active' : ''), onclick: async () => { tab = k; open = null; if (k === 'vanilla' && !van) { try { await loadVanilla(); } catch (e) { ctx.toast(e.message, 'bad'); } } render(); } }, l)),
         h('span', { class: 'grow' }), h('button', { class: 'px-btn primary', onclick: () => startEditor(null) }, '+ ' + L('Neue Textur zeichnen', 'Draw new texture')),
         h('button', { class: 'px-btn', onclick: () => picker.click() }, L('PNG importieren', 'Import PNG'))),
       editor ? editorView() : null,
       cur && tab === 'entries' && !editor ? detail(cur) : null,
-      tab === 'entries'
+      tab === 'vanilla' ? vanillaView() : null,
+      tab === 'vanilla' ? null : tab === 'entries'
         ? (entries.length ? h('div', { class: 'grid', style: 'margin-top:14px' }, entries.map(e => h('div', { class: 'tile' + (e.id === open ? ' sel' : '') + (e.enabled ? '' : ' off'), onclick: () => { open = e.id; render(); } },
           h('img', { src: texUrl(e.id) }), h('div', { class: 'nm' }, e.id), h('div', { class: 'meta' }, e.material), h('div', { class: 'meta' }, '"' + e.name + '"'), e.abilities.length ? h('span', { class: 'tag' }, e.abilities.length + ' ★') : null)))
           : h('div', { class: 'empty', style: 'margin-top:14px' }, L('Noch keine Eintraege. Zeichne eine Textur oder importiere ein PNG.', 'No entries yet. Draw a texture or import a PNG.')))

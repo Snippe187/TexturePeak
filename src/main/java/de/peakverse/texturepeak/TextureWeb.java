@@ -29,10 +29,13 @@ final class TextureWeb {
     private final Supplier<EntryStore> store;
     private final Predicate<String> isItemType;
 
-    TextureWeb(WebRegistry web, Supplier<EntryStore> store, Predicate<String> isItemType) {
+    private final VanillaTextures vanilla;
+
+    TextureWeb(WebRegistry web, Supplier<EntryStore> store, Predicate<String> isItemType, VanillaTextures vanilla) {
         this.web = web;
         this.store = store;
         this.isItemType = isItemType;
+        this.vanilla = vanilla;
     }
 
     void register(String script) {
@@ -43,6 +46,31 @@ final class TextureWeb {
         web.route("archive", r -> main(() -> WebResponse.json(list(true))));
         web.route("archive/*", this::archive);
         web.route("texture/*", this::texture);
+        web.route("vanilla", r -> WebResponse.json(vanillaStatus()));
+        web.route("vanilla/download", r -> {
+            if (!r.method().equals("POST")) return WebResponse.error(405, "POST");
+            boolean started = vanilla.start();
+            if (started) web.log(r.admin(), "Download der Standard-Texturen gestartet (Spiel " + vanilla.version() + ")");
+            return WebResponse.json(vanillaStatus());
+        });
+        web.route("vanilla/*", this::vanillaFile);
+    }
+
+    private String vanillaStatus() {
+        JsonObject o = new JsonObject();
+        o.addProperty("ready", vanilla.ready());
+        o.addProperty("busy", vanilla.busy());
+        o.addProperty("error", vanilla.error());
+        o.addProperty("version", vanilla.version());
+        o.add("item", strings(vanilla.names("item")));
+        o.add("block", strings(vanilla.names("block")));
+        return GSON.toJson(o);
+    }
+
+    private WebResponse vanillaFile(WebRequest r) throws Exception {
+        String[] p = r.path().split("/"); // vanilla/<item|block>/<name>
+        Path file = p.length == 3 ? vanilla.file(p[1], p[2]) : null;
+        return file == null ? WebResponse.error(404, "Keine Textur") : WebResponse.bytes("image/png", Files.readAllBytes(file));
     }
 
     private interface Job {
