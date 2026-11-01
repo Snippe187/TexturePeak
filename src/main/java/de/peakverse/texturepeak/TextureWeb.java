@@ -30,8 +30,10 @@ final class TextureWeb {
     private final Predicate<String> isItemType;
 
     private final VanillaTextures vanilla;
+    private final OverrideStore overrides;
 
-    TextureWeb(WebRegistry web, Supplier<EntryStore> store, Predicate<String> isItemType, VanillaTextures vanilla) {
+    TextureWeb(WebRegistry web, Supplier<EntryStore> store, Predicate<String> isItemType, VanillaTextures vanilla, OverrideStore overrides) {
+        this.overrides = overrides;
         this.web = web;
         this.store = store;
         this.isItemType = isItemType;
@@ -54,22 +56,57 @@ final class TextureWeb {
             return WebResponse.json(vanillaStatus());
         });
         web.route("vanilla/*", this::vanillaFile);
+        web.route("overrides", r -> WebResponse.json(GSON.toJson(overrides.list())));
+        web.route("override/*", this::override);
+    }
+
+    /** {@code override/<art>/<name>}: eigene Aenderung einer Standard-Textur ansehen (GET), speichern (PUT) oder zuruecksetzen (DELETE). */
+    private WebResponse override(WebRequest r) throws Exception {
+        String rest = r.path().substring("override/".length());
+        int slash = rest.indexOf('/');
+        if (slash < 1) return WebResponse.error(404, "Unbekannte Adresse");
+        String kind = rest.substring(0, slash), name = rest.substring(slash + 1);
+        if (!OverrideStore.validName(kind, name)) return WebResponse.error(400, "Ungueltiger Textur-Name");
+        switch (r.method()) {
+            case "GET" -> {
+                byte[] png = overrides.get(kind, name);
+                return png == null ? WebResponse.error(404, "Keine Aenderung") : WebResponse.bytes("image/png", png);
+            }
+            case "PUT" -> {
+                return change(r, "Standard-Textur geaendert: " + kind + "/" + name, () -> {
+                    overrides.put(kind, name, r.body());
+                    return WebResponse.ok();
+                });
+            }
+            case "DELETE" -> {
+                return change(r, "Standard-Textur zurueckgesetzt: " + kind + "/" + name, () -> {
+                    if (!overrides.delete(kind, name)) throw new IllegalArgumentException("Diese Textur ist nicht geaendert.");
+                    return WebResponse.ok();
+                });
+            }
+            default -> {
+                return WebResponse.error(405, "GET, PUT oder DELETE");
+            }
+        }
     }
 
     private String vanillaStatus() {
         JsonObject o = new JsonObject();
         o.addProperty("ready", vanilla.ready());
+        o.addProperty("guiReady", vanilla.guiReady());
         o.addProperty("busy", vanilla.busy());
         o.addProperty("error", vanilla.error());
         o.addProperty("version", vanilla.version());
         o.add("item", strings(vanilla.names("item")));
         o.add("block", strings(vanilla.names("block")));
+        o.add("gui", strings(vanilla.names("gui")));
         return GSON.toJson(o);
     }
 
     private WebResponse vanillaFile(WebRequest r) throws Exception {
-        String[] p = r.path().split("/"); // vanilla/<item|block>/<name>
-        Path file = p.length == 3 ? vanilla.file(p[1], p[2]) : null;
+        String rest = r.path().substring("vanilla/".length()); // <item|block|gui>/<name>; bei gui mit Unterordnern
+        int slash = rest.indexOf('/');
+        Path file = slash > 0 ? vanilla.file(rest.substring(0, slash), rest.substring(slash + 1)) : null;
         return file == null ? WebResponse.error(404, "Keine Textur") : WebResponse.bytes("image/png", Files.readAllBytes(file));
     }
 

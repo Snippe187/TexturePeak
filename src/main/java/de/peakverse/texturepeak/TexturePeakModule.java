@@ -39,6 +39,7 @@ public final class TexturePeakModule implements PeakModule, Listener, CommandExe
 
     private ModuleContext context;
     private EntryStore store;
+    private OverrideStore overrides;
     private NamespacedKey markerKey;
     private AbilityRunner runner;
     private org.bukkit.scheduler.BukkitTask task;
@@ -58,6 +59,7 @@ public final class TexturePeakModule implements PeakModule, Listener, CommandExe
         this.context = context;
         context.saveDefaultConfig();
         store = new EntryStore(context.dataFolder().toPath(), System::currentTimeMillis);
+        overrides = new OverrideStore(context.dataFolder().toPath());
         markerKey = new NamespacedKey(context.host(), "entry");
         try {
             Files.createDirectories(importFolder());
@@ -77,7 +79,7 @@ public final class TexturePeakModule implements PeakModule, Listener, CommandExe
             try (java.io.InputStream in = TexturePeakModule.class.getResourceAsStream("/modules/texturepeak/panel.js")) {
                 if (in == null) throw new IOException("panel.js fehlt im Jar");
                 VanillaTextures vanilla = new VanillaTextures(context.dataFolder().toPath(), org.bukkit.Bukkit.getMinecraftVersion(), context.logger());
-                new TextureWeb(context.web(), () -> store, TexturePeakModule::isItemType, vanilla).register(new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
+                new TextureWeb(context.web(), () -> store, TexturePeakModule::isItemType, vanilla, overrides).register(new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
             } catch (IOException e) {
                 context.logger().warning("Web-Seite von TexturePeak nicht verfuegbar: " + e.getMessage());
             }
@@ -88,6 +90,7 @@ public final class TexturePeakModule implements PeakModule, Listener, CommandExe
     @Override
     public void contributePack(PackSink sink) {
         if (store != null) PackFiles.contribute(store, sink, context.logger());
+        if (overrides != null) overrides.contribute(sink, context.logger());
     }
 
     @Override

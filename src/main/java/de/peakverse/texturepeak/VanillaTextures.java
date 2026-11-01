@@ -21,14 +21,16 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 
 /**
- * Die Vorschaubilder der Standard-Texturen fuer die Auswahl im Web-Editor. Die Bilder gehoeren Mojang und liegen deshalb NICHT in diesem Projekt: der
+ * Die Vorschaubilder der Standard-Texturen (Gegenstaende, Bloecke und die Oberflaeche/GUI) fuer das Inventar im Web-Editor. Die Bilder gehoeren Mojang und liegen deshalb NICHT in diesem Projekt: der
  * Admin loest den Download per Knopf aus, der Server holt sich das Client-Jar der eigenen Spielversion von den offiziellen Mojang-Servern und legt nur die
- * Item- und Block-Bilder in {@code plugins/TexturePeak/vanilla/} ab.
+ * Item-, Block- und GUI-Bilder in {@code plugins/TexturePeak/vanilla/} ab.
  */
 final class VanillaTextures {
     static final Pattern ENTRY = Pattern.compile("assets/minecraft/textures/(item|block)/([a-z0-9_]+)\\.png");
+    /** GUI-Bilder liegen in Unterordnern ({@code gui/container/inventory.png}, {@code gui/sprites/hud/heart/full.png}). */
+    static final Pattern GUI = Pattern.compile("assets/minecraft/textures/gui/([a-z0-9_./-]{1,150})\\.png");
     static final long MAX_ENTRY = 1L << 20;
-    static final int MAX_FILES = 6000;
+    static final int MAX_FILES = 15000;
     private static final long MAX_JAR = 400L << 20;
     private static final String MANIFEST = "https://piston-meta.mojang.com/mc/game/version_manifest_v2.json";
     private static final Gson GSON = new Gson();
@@ -61,13 +63,18 @@ final class VanillaTextures {
         return Files.isRegularFile(dir.resolve("version.txt"));
     }
 
-    /** Dateinamen ohne Endung, z. B. {@code diamond_sword}. */
+    /** Sind auch die GUI-Bilder da? (Aeltere Downloads haben nur Gegenstaende und Bloecke und muessen neu geladen werden.) */
+    boolean guiReady() {
+        return Files.isDirectory(dir.resolve("gui"));
+    }
+
+    /** Dateinamen ohne Endung, z. B. {@code diamond_sword}; bei {@code gui} der Pfad unterhalb von {@code gui/} (z. B. {@code container/inventory}). */
     List<String> names(String kind) {
-        if (!kind.equals("item") && !kind.equals("block")) return List.of();
+        if (!kind.equals("item") && !kind.equals("block") && !kind.equals("gui")) return List.of();
         Path d = dir.resolve(kind);
         if (!Files.isDirectory(d)) return List.of();
-        try (Stream<Path> s = Files.list(d)) {
-            return s.map(p -> p.getFileName().toString()).filter(n -> n.endsWith(".png")).map(n -> n.substring(0, n.length() - 4)).sorted().toList();
+        try (Stream<Path> s = kind.equals("gui") ? Files.walk(d) : Files.list(d)) {
+            return s.filter(Files::isRegularFile).map(p -> d.relativize(p).toString().replace('\\', '/')).filter(n -> n.endsWith(".png")).map(n -> n.substring(0, n.length() - 4)).sorted().toList();
         } catch (IOException e) {
             return List.of();
         }
@@ -75,9 +82,19 @@ final class VanillaTextures {
 
     /** Die PNG-Datei oder {@code null}; Art und Name werden streng geprueft (kein Ausbrechen aus dem Ordner). */
     Path file(String kind, String name) {
-        if (!(kind.equals("item") || kind.equals("block")) || !name.matches("[a-z0-9_]{1,80}")) return null;
-        Path p = dir.resolve(kind).resolve(name + ".png");
+        boolean gui = kind.equals("gui");
+        if (!(kind.equals("item") || kind.equals("block") || gui)) return null;
+        if (gui ? !validGuiName(name) : !name.matches("[a-z0-9_]{1,80}")) return null;
+        Path p = dir.resolve(kind).resolve(name + ".png").normalize();
+        if (!p.startsWith(dir.resolve(kind))) return null;
         return Files.isRegularFile(p) ? p : null;
+    }
+
+    /** Ein GUI-Pfad: Teile aus a-z 0-9 _ - ., getrennt durch /, ohne leere Teile und ohne "..". */
+    static boolean validGuiName(String name) {
+        if (name == null || !name.matches("[a-z0-9_./-]{1,150}") || name.startsWith("/") || name.endsWith("/") || name.contains("//")) return false;
+        for (String part : name.split("/")) if (part.startsWith(".")) return false;
+        return true;
     }
 
     /** Startet den Download im Hintergrund; {@code false}, wenn schon einer laeuft. */
@@ -146,23 +163,28 @@ final class VanillaTextures {
         return res.body();
     }
 
-    /** Legt nur {@code textures/item} und {@code textures/block} als PNG ab; alles andere im Jar wird ignoriert. */
+    /** Legt nur {@code textures/item}, {@code textures/block} und {@code textures/gui} als PNG ab; alles andere im Jar wird ignoriert. */
     static int extract(Path jar, Path dir, String version) throws IOException {
         Path tmp = dir.resolveSibling(dir.getFileName() + ".neu");
         deleteTree(tmp);
         Files.createDirectories(tmp.resolve("item"));
         Files.createDirectories(tmp.resolve("block"));
+        Files.createDirectories(tmp.resolve("gui"));
         int count = 0;
         try (ZipFile zip = new ZipFile(jar.toFile())) {
             List<? extends ZipEntry> entries = new ArrayList<>(zip.stream().toList());
             for (ZipEntry e : entries) {
                 var m = ENTRY.matcher(e.getName());
-                if (e.isDirectory() || !m.matches()) continue;
+                var g = GUI.matcher(e.getName());
+                boolean isGui = !e.isDirectory() && g.matches() && validGuiName(g.group(1));
+                if (e.isDirectory() || !(m.matches() || isGui)) continue;
                 if (count >= MAX_FILES) throw new IOException("Zu viele Bilder im Jar.");
                 try (InputStream in = zip.getInputStream(e)) {
                     byte[] data = in.readNBytes((int) MAX_ENTRY + 1);
                     if (data.length > MAX_ENTRY) continue;
-                    Files.write(tmp.resolve(m.group(1)).resolve(m.group(2) + ".png"), data);
+                    Path target = isGui ? tmp.resolve("gui").resolve(g.group(1) + ".png") : tmp.resolve(m.group(1)).resolve(m.group(2) + ".png");
+                    Files.createDirectories(target.getParent());
+                    Files.write(target, data);
                     count++;
                 }
             }

@@ -33,16 +33,23 @@ class VanillaTexturesTest {
     }
 
     @Test
-    void extractsOnlyItemAndBlockPngs() throws Exception {
+    void extractsOnlyItemBlockAndGuiPngs() throws Exception {
         Path jar = jar("assets/minecraft/textures/item/diamond_sword.png", "assets/minecraft/textures/block/stone.png", "assets/minecraft/textures/entity/zombie.png",
-                "assets/minecraft/textures/item/Bad.png", "assets/minecraft/textures/item/sub/x.png", "assets/minecraft/sounds.json", "../evil.png");
+                "assets/minecraft/textures/item/Bad.png", "assets/minecraft/textures/item/sub/x.png", "assets/minecraft/sounds.json", "../evil.png",
+                "assets/minecraft/textures/gui/container/inventory.png", "assets/minecraft/textures/gui/sprites/hud/heart/full.png", "assets/minecraft/textures/gui/Bad Name.png");
         Path dir = tmp.resolve("vanilla");
-        assertEquals(2, VanillaTextures.extract(jar, dir, "26.2"));
+        assertEquals(4, VanillaTextures.extract(jar, dir, "26.2"));
         VanillaTextures v = new VanillaTextures(tmp, "26.2", Logger.getAnonymousLogger());
         assertTrue(v.ready());
         assertEquals(List.of("diamond_sword"), v.names("item"));
         assertEquals(List.of("stone"), v.names("block"));
         assertNotNull(v.file("item", "diamond_sword"));
+        assertTrue(v.guiReady());
+        assertEquals(List.of("container/inventory", "sprites/hud/heart/full"), v.names("gui"));
+        assertNotNull(v.file("gui", "container/inventory"));
+        assertNull(v.file("gui", "../item/apple"));
+        assertNull(v.file("gui", "container/../../x"));
+        assertNull(v.file("gui", "/etc/passwd"));
         assertFalse(Files.exists(tmp.resolve("evil.png")));
     }
 
