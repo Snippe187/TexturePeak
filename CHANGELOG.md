@@ -1,4 +1,4 @@
-﻿# Changelog
+# Changelog
 
 ## 0.1.0 (in Arbeit)
 - Eingebautes Modul von PeakCore: Eintraege (Gegenstand + Amboss-Name -> Textur) mit Archiv, Pruefung der Texturen, Item-Modell `texturepeak:<id>`
