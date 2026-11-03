@@ -140,14 +140,47 @@ export default async function mount(root, ctx) {
           tg.type === 'new' ? newEntryForm(toBlob) : null)));
   }
 
+  const slug = s => s.toLowerCase().replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss').replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 32);
+
+  /** Die drei Felder eines eigenen Items (Name am Amboss, Gegenstand, Kennung) mit Hilfetexten und einer Zeile "So geht es im Spiel". */
+  function itemForm(init) {
+    let idTouched = !!init.id;
+    const nameIn = h('input', { value: init.name || '', placeholder: L('z. B. Feuerschwert', 'e.g. Fire Sword'), maxlength: meta.maxName, oninput: () => { if (!idTouched) idIn.value = slug(nameIn.value); upd(); } });
+    const matIn = h('input', { list: 'mats', value: init.material || '', placeholder: 'DIAMOND_SWORD', oninput: () => upd() });
+    const idIn = h('input', { value: init.id || slug(init.name || ''), placeholder: 'feuerschwert', maxlength: meta.maxId, oninput: () => { idTouched = true; upd(); } });
+    const prev = h('div', { class: 'tp-prev' });
+    function upd() {
+      const m = matIn.value.trim().toUpperCase(), ok = meta.materials.includes(m), nm = nameIn.value.trim(), idOk = /^[a-z0-9_]+$/.test(idIn.value.trim());
+      prev.className = 'tp-prev' + (ok && nm && idOk ? '' : ' warn');
+      prev.textContent = !m ? L('Wähle bei 2 den Gegenstand, der die Basis sein soll.', 'Pick the base item at 2.')
+        : !ok ? L('„' + m + '“ ist kein Minecraft-Gegenstand. Tippe ein paar Buchstaben und wähle einen aus der Liste.', '"' + m + '" is not a Minecraft item. Type a few letters and pick one from the list.')
+        : !nm ? L('Gib bei 1 einen Namen ein.', 'Enter a name at 1.')
+        : !idOk ? L('Die Kennung darf nur kleine Buchstaben, Zahlen und _ enthalten.', 'The id may only contain lowercase letters, digits and _.')
+        : L('So geht es im Spiel: Ein ' + pretty(m.toLowerCase()) + ', das am Amboss in „' + nm + '“ umbenannt wird, bekommt diese Textur.', 'In game: a ' + pretty(m.toLowerCase()) + ' renamed to "' + nm + '" at an anvil gets this texture.');
+    }
+    const node = h('div', { class: 'tp-form' },
+      h('datalist', { id: 'mats' }, meta.materials.map(m => h('option', { value: m }))),
+      field('1 · ' + L('Name im Spiel', 'Name in game'), nameIn, L('Name am Amboss', 'Anvil name'),
+        L('Der Name, den ein Gegenstand am Amboss bekommen muss, damit er diese Textur und die Fähigkeiten erhält. Spieler benennen ein normales Item um, ohne diesen Namen bleibt es ein ganz normales Item. Am besten genau so schreiben, wie du ihn am Amboss eintippst.',
+          'The name an item needs at the anvil to get this texture and the abilities. Players rename a normal item; without this name it stays a normal item. Best type it exactly as you do at the anvil.')),
+      field('2 · ' + L('Gegenstand (Basis)', 'Item (base)'), matIn, L('Welcher Minecraft-Gegenstand', 'Which Minecraft item'),
+        L('Der echte Minecraft-Gegenstand als Basis, z. B. DIAMOND_SWORD. Nur dieser Typ bekommt zusammen mit dem Namen die Textur. Tippe ein paar Buchstaben, die Liste schlägt passende vor.',
+          'The real Minecraft item used as the base, e.g. DIAMOND_SWORD. Only this type with the name gets the texture. Type a few letters, the list suggests matches.')),
+      field('3 · ' + L('Kennung', 'Id'), idIn, L('Interner Name', 'Internal name'),
+        L('Ein interner Name nur für diesen Eintrag (kleine Buchstaben, Zahlen, _). Spieler sehen ihn nie. Er wird aus dem Namen vorgeschlagen und muss nur einmalig sein.',
+          'An internal name for this entry only (lowercase letters, digits, _). Players never see it. It is suggested from the name and only has to be unique.'),
+        L('Wird automatisch aus dem Namen gebildet.', 'Filled in from the name automatically.')),
+      prev);
+    upd();
+    return { node, get: () => ({ id: idIn.value.trim().toLowerCase(), material: matIn.value.trim().toUpperCase(), name: nameIn.value.trim() }) };
+  }
+
   function newEntryForm(toBlob) {
-    const id = h('input', { placeholder: 'kennung_klein' }), name = h('input', { placeholder: L('Name im Spiel (Amboss)', 'Name in game (anvil)') });
-    const mat = h('input', { placeholder: 'DIAMOND_HELMET', list: 'mats', value: editor.material || '' });
-    return h('div', {}, h('datalist', { id: 'mats' }, meta.materials.map(m => h('option', { value: m }))),
-      h('label', {}, L('Kennung', 'Id')), id, h('label', {}, L('Gegenstand', 'Item type')), mat, h('label', {}, L('Name', 'Name')), name,
+    const form = itemForm({ material: editor.material || '' });
+    return h('div', {}, form.node,
       h('div', { class: 'row', style: 'margin-top:12px' }, h('button', { class: 'px-btn primary', onclick: async () => {
         const blob = await toBlob(); const bytes = new Uint8Array(await blob.arrayBuffer()); let bin = ''; for (let i = 0; i < bytes.length; i += 8192) bin += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192)); const b64 = btoa(bin);
-        if (await call('entries', 'POST', { id: id.value, material: mat.value.trim().toUpperCase(), name: name.value, png: b64 }, L('Eintrag angelegt', 'Entry created'))) { editor = null; tab = 'entries'; render(); }
+        if (await call('entries', 'POST', { ...form.get(), png: b64 }, L('Eintrag angelegt', 'Entry created'))) { editor = null; tab = 'entries'; render(); }
       } }, L('Als neuen Eintrag anlegen', 'Create as new entry'))));
   }
 
@@ -205,6 +238,19 @@ export default async function mount(root, ctx) {
   const hideMenu = () => { menu.style.display = 'none'; };
   const place = (el, x, y) => { el.style.display = 'block'; const w = el.offsetWidth, hh = el.offsetHeight; el.style.left = Math.max(4, Math.min(x + 14, innerWidth - w - 8)) + 'px'; el.style.top = Math.max(4, Math.min(y + 14, innerHeight - hh - 8)) + 'px'; };
   if (!menu._bound) { menu._bound = true; document.addEventListener('click', hideMenu); document.addEventListener('scroll', () => { hideMenu(); hideTip(); }, true); document.addEventListener('keydown', ev => { if (ev.key === 'Escape') hideMenu(); }); }
+  // ---------- Hilfetexte: Maus über ein Feld zeigt, was es im Spiel bewirkt ----------
+  function help(el, title, text) {
+    const fill = () => tip.replaceChildren(h('div', { class: 'tp-tip-t' }, title), h('div', { class: 'tp-tip-d' }, text));
+    el.addEventListener('mousemove', ev => { fill(); place(tip, ev.clientX, ev.clientY); });
+    el.addEventListener('mouseleave', hideTip);
+    el.addEventListener('focusin', () => { const r = el.getBoundingClientRect(); fill(); place(tip, r.left, r.bottom); });
+    el.addEventListener('focusout', hideTip);
+    return el;
+  }
+  /** Ein beschriftetes Eingabefeld mit Hilfetext (Maus über das Feld oder das "?"). */
+  function field(label, input, helpTitle, helpText, note) {
+    return help(h('div', { class: 'tp-field' }, h('label', {}, label, h('span', { class: 'tp-q' }, '?')), input, note ? h('div', { class: 'sub' }, note) : null), helpTitle, helpText);
+  }
   const infoOf = it => {
     const s = [];
     if (hasOvr(it.kind, it.name)) s.push(L('Eigene Änderung im Server-Pack', 'Own change in the server pack'));
@@ -311,31 +357,33 @@ export default async function mount(root, ctx) {
   /** Kopie anlegen / Fähigkeiten zuweisen: legt einen Eintrag (Gegenstand + Name am Amboss) mit dieser Textur an. */
   function copyDialog(d) {
     const it = d.it, mat = it.name.toUpperCase();
-    const idIn = h('input', { value: 'mein_' + it.name.slice(0, 24), placeholder: 'kennung_klein' }), nameIn = h('input', { placeholder: L('Name im Spiel (Amboss)', 'Name in game (anvil)'), value: pretty(it.name).replace(/\b\w/g, c => c.toUpperCase()) });
-    const matIn = h('input', { list: 'mats', value: meta.materials.includes(mat) ? mat : '', placeholder: 'DIAMOND_SWORD' });
+    const form = itemForm({ name: pretty(it.name).replace(/\b\w/g, c => c.toUpperCase()), material: meta.materials.includes(mat) ? mat : '' });
     return h('div', { class: 'card tp-pop' },
       h('div', { class: 'row' }, h('img', { src: gameUrl(it.kind, it.name), class: 'tp-vbig' }), h('div', { class: 'grow' }, h('h2', { style: 'margin:0' }, d.mode === 'copy' ? L('Kopieren als neues Item', 'Copy as new item') : L('Fähigkeiten zuweisen', 'Assign abilities')),
-        h('div', { class: 'sub' }, d.mode === 'copy' ? L('Neuer Eintrag mit dieser Textur. Danach kannst du Namen, Bild und Fähigkeiten frei ändern.', 'New entry with this texture. Afterwards you can freely change name, image and abilities.')
-          : L('Fähigkeiten hängen an einem eigenen Item (Gegenstand + Name am Amboss). Ich lege dafür eine Kopie an und öffne danach die Fähigkeiten.', 'Abilities belong to a custom item (item + anvil name). I create a copy for that and then open the abilities.'))),
+        h('div', { class: 'sub' }, d.mode === 'copy' ? L('Ein neuer Eintrag mit dieser Textur. Danach kannst du Name, Bild und Fähigkeiten frei ändern.', 'A new entry with this texture. Afterwards you can freely change name, image and abilities.')
+          : L('Fähigkeiten hängen an einem eigenen Item. Dafür lege ich eine Kopie an und öffne danach die Fähigkeiten.', 'Abilities belong to a custom item. I create a copy for that and then open the abilities.')),
+        h('div', { class: 'sub' }, L('Fahre mit der Maus über ein Feld, dann steht dort, was es im Spiel bewirkt.', 'Hover a field to see what it does in game.'))),
         h('button', { class: 'px-btn small ghost', onclick: () => { dlg = null; render(); } }, '×')),
-      h('datalist', { id: 'mats' }, meta.materials.map(m => h('option', { value: m }))),
-      h('div', { class: 'row', style: 'margin-top:10px' }, h('div', {}, h('label', {}, L('Kennung', 'Id')), idIn), h('div', {}, h('label', {}, L('Gegenstand', 'Item type')), matIn), h('div', {}, h('label', {}, L('Name', 'Name')), nameIn)),
+      h('div', { style: 'margin-top:12px' }, form.node),
       h('div', { class: 'row', style: 'margin-top:12px' }, h('button', { class: 'px-btn primary', onclick: async () => {
         try {
           const c = await firstFrame(gameUrl(it.kind, it.name));
           if (![16, 32, 64, 128, 256, 512].includes(c.width)) { ctx.toast(L('Diese Textur hat eine ungewoehnliche Groesse.', 'This texture has an unusual size.'), 'bad'); return; }
-          if (await call('entries', 'POST', { id: idIn.value, material: matIn.value.trim().toUpperCase(), name: nameIn.value, png: canvasB64(c) }, L('Eintrag angelegt', 'Entry created'))) {
-            const id = idIn.value.trim().toLowerCase(); dlg = null; pick = null;
-            if (d.mode === 'abilities') { tab = 'entries'; open = id; } else { cat = 'custom'; }
+          const v = form.get();
+          if (await call('entries', 'POST', { ...v, png: canvasB64(c) }, L('Eintrag angelegt', 'Entry created'))) {
+            dlg = null; pick = null;
+            if (d.mode === 'abilities') { tab = 'entries'; open = v.id; } else { cat = 'custom'; }
             render(); window.scrollTo({ top: 0, behavior: 'smooth' });
           }
         } catch (err) { ctx.toast(err.message || L('Das Bild konnte nicht geladen werden.', 'The image could not be loaded.'), 'bad'); }
-      } }, d.mode === 'copy' ? L('Kopie anlegen', 'Create copy') : L('Anlegen und Fähigkeiten öffnen', 'Create and open abilities'))));
+      } }, d.mode === 'copy' ? L('Kopie anlegen', 'Create copy') : L('Anlegen und Fähigkeiten öffnen', 'Create and open abilities')),
+        h('button', { class: 'px-btn ghost', onclick: () => { dlg = null; render(); } }, L('Abbrechen', 'Cancel'))));
   }
 
   // Aussehen dieser Seite
-  if (!document.getElementById('tp-style')) {
-    const st = document.createElement('style'); st.id = 'tp-style';
+  document.getElementById('tp-style')?.remove(); // alte Fassung des Stils
+  if (!document.getElementById('tp-style2')) {
+    const st = document.createElement('style'); st.id = 'tp-style2';
     st.textContent = `
 .tp-inv{display:flex;gap:0;align-items:flex-start;margin-top:12px}
 .tp-tabs{display:flex;flex-direction:column;gap:3px;flex:none;width:150px}
@@ -362,38 +410,185 @@ export default async function mount(root, ctx) {
 @keyframes tpbig{from{transform:scale(.3) rotate(-25deg);opacity:0}to{transform:none;opacity:1}}
 @keyframes tppop{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:none}}
 @media (max-width:760px){.tp-inv{flex-direction:column}.tp-tabs{flex-direction:row;flex-wrap:wrap;width:auto;margin-bottom:6px}.tp-tab{border-right:var(--px) solid var(--line)}.tp-tab b{display:none}}
+.tp-tip-d{color:#ddd;font-size:12px;margin-top:3px;line-height:1.35;max-width:300px}
+.tp-form{display:grid;gap:12px}
+.tp-field{padding:8px 10px;border:2px solid var(--line);background:var(--panel2)}.tp-field:hover{border-color:var(--accent)}
+.tp-field label{display:flex;gap:8px;align-items:center;margin:0 0 4px;font-weight:bold}
+.tp-field input{width:100%;box-sizing:border-box}
+.tp-q{display:inline-flex;width:18px;height:18px;border-radius:50%;background:var(--accent);color:#000;font-size:12px;align-items:center;justify-content:center;cursor:help;flex:none}
+.tp-prev{margin-top:4px;padding:8px 12px;border-left:4px solid #55ff55;background:var(--panel2)}.tp-prev.warn{border-left-color:#ffd86b}
+.tp-wiz{background:var(--panel2);margin-top:14px}
+.tp-step{margin:0 0 14px}.tp-step-h{display:flex;gap:8px;align-items:center;font-weight:bold;margin-bottom:6px}
+.tp-num{display:inline-flex;width:22px;height:22px;border-radius:50%;background:var(--accent);color:#000;align-items:center;justify-content:center;font-size:13px}
+.tp-kinds{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:8px}
+.tp-kind{display:grid;gap:2px;text-align:left;padding:10px;background:var(--panel);border:2px solid var(--line);color:inherit;font-family:inherit;cursor:pointer}
+.tp-kind .ic{font-size:20px}.tp-kind small{opacity:.8}.tp-kind:hover{border-color:var(--accent)}.tp-kind.on{border-color:var(--accent);background:#2a3a5a}
+.tp-seg{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px}
+.tp-segb{padding:8px 14px;background:var(--panel);border:2px solid var(--line);color:inherit;font-family:inherit;cursor:pointer}.tp-segb:hover{border-color:var(--accent)}.tp-segb.on{border-color:var(--accent);background:#2a3a5a;font-weight:bold}
+.tp-chips{display:flex;flex-wrap:wrap;gap:6px;max-height:190px;overflow:auto;margin-top:8px;padding:2px}
+.tp-chip{padding:5px 10px;background:var(--panel);border:2px solid var(--line);color:inherit;font-family:inherit;cursor:pointer}.tp-chip:hover{border-color:var(--accent)}.tp-chip.on{border-color:var(--accent);background:var(--accent);color:#000;font-weight:bold}
+.tp-amount{display:flex;gap:10px;align-items:center;flex-wrap:wrap}.tp-amount input[type=range]{flex:1;min-width:140px}.tp-amount input[type=number]{width:110px}.tp-lv{min-width:34px;text-align:center;font-size:18px}
+.tp-sum{display:grid;gap:6px;border-top:2px solid var(--line);padding-top:10px}.tp-sum .px-btn{justify-self:start}
+.tp-ablist{display:grid;gap:6px}.tp-ab{display:flex;gap:10px;align-items:center;padding:8px 10px;background:var(--panel2);border:2px solid var(--line)}.tp-ab:hover{border-color:var(--accent)}
+.tp-ab-ic{font-size:22px;width:30px;text-align:center}.tp-ab-t{font-weight:bold}.tp-ab .grow{flex:1;min-width:0}.tp-ab .px-btn{margin-left:auto;flex:none}
+.tp-empty{padding:12px;border:2px dashed var(--line);opacity:.8}
+.tp-more{margin-top:14px}.tp-more summary{cursor:pointer;font-weight:bold}
 @media (prefers-reduced-motion:reduce){.tp-slot,.tp-vbig,.tp-pop{animation:none;opacity:1}}`;
     document.head.appendChild(st);
   }
 
   // ---------- Eintraege ----------
-  function abilityForm(en) {
-    const kind = h('select', {}, ['EFFECT', 'ATTRIBUTE', 'PARTICLE'].map(k => h('option', { value: k }, { EFFECT: L('Effekt', 'Effect'), ATTRIBUTE: L('Wert', 'Attribute'), PARTICLE: L('Partikel', 'Particle') }[k])));
-    const when = h('select', {}, h('option', { value: 'WORN' }, L('getragen', 'worn')), h('option', { value: 'HELD' }, L('gehalten', 'held')));
-    const name = h('input', { list: 'names' }), list = h('datalist', { id: 'names' }), level = h('input', { type: 'number', value: 1, min: 1 }), amount = h('input', { type: 'number', step: '0.1', value: 1 });
-    const mul = h('select', {}, h('option', { value: 'false' }, L('fester Wert', 'flat')), h('option', { value: 'true' }, L('Anteil (0.1 = 10 %)', 'fraction (0.1 = 10 %)')));
-    const fillNames = () => { list.replaceChildren(...(kind.value === 'EFFECT' ? meta.effects : kind.value === 'ATTRIBUTE' ? meta.attributes : meta.particles).map(n => h('option', { value: n }))); };
-    kind.onchange = fillNames; fillNames();
-    return h('div', { class: 'card', style: 'background:var(--panel2)' }, list, h('div', { class: 'row' }, kind, when, h('div', { class: 'grow' }, name)),
-      h('div', { class: 'row', style: 'margin-top:8px' }, h('span', { class: 'sub' }, L('Stufe/Anzahl', 'Level/count')), level, h('span', { class: 'sub' }, L('Wert', 'Value')), amount, mul,
-        h('button', { class: 'px-btn primary', onclick: async () => {
-          if (await call('entries/' + en.id + '/abilities', 'POST', { kind: kind.value, when: when.value, name: name.value, level: +level.value, amount: +amount.value, multiply: mul.value === 'true' }, L('Faehigkeit hinzugefuegt', 'Ability added'))) render();
-        } }, L('Hinzufuegen', 'Add'))));
+  // ---------- Fähigkeiten ----------
+  const ROMAN = ['', 'I', 'II', 'III', 'IV', 'V', 'VI', 'VII', 'VIII', 'IX', 'X'];
+  const KIND = {
+    EFFECT: { icon: '✨', de: 'Effekt', en: 'Effect', descDe: 'Ein Trank-Effekt, z. B. Geschwindigkeit oder Nachtsicht.', descEn: 'A potion effect, e.g. speed or night vision.',
+      helpDe: 'Gibt dem Spieler einen Trank-Effekt, solange er den Gegenstand trägt oder hält. Der Effekt wird laufend erneuert und endet kurz nach dem Ablegen. Stufe I ist die normale Stärke. Haben mehrere Gegenstände denselben Effekt, gilt die höchste Stufe.',
+      helpEn: 'Gives the player a potion effect while wearing or holding the item. It is refreshed constantly and ends shortly after taking it off. Level I is normal strength. If several items give the same effect, the highest level wins.' },
+    ATTRIBUTE: { icon: '⚙', de: 'Wert', en: 'Stat', descDe: 'Ein Grundwert, z. B. mehr Leben oder Lauftempo.', descEn: 'A base stat, e.g. more health or speed.',
+      helpDe: 'Ändert einen Grundwert des Spielers, z. B. maximale Leben, Lauftempo oder Angriffsschaden. Gilt nur, solange der Gegenstand getragen oder gehalten wird.',
+      helpEn: 'Changes a base stat of the player, e.g. max health, walking speed or attack damage. Only applies while the item is worn or held.' },
+    PARTICLE: { icon: '✦', de: 'Partikel', en: 'Particles', descDe: 'Sichtbare Funken oder Flammen um den Spieler.', descEn: 'Visible sparks or flames around the player.',
+      helpDe: 'Lässt Partikel um den Spieler erscheinen, z. B. Flammen oder Herzen. Nur Optik, ohne Wirkung aufs Spiel. Die Zahl sagt, wie viele pro Sekunde erscheinen.',
+      helpEn: 'Shows particles around the player, e.g. flames or hearts. Visual only, no gameplay effect. The number is how many appear per second.' }
+  };
+  const EFFECTS = {
+    speed: ['Geschwindigkeit', 'Du läufst schneller.'], slowness: ['Langsamkeit', 'Du läufst langsamer.'], haste: ['Eile', 'Du baust schneller ab und schlägst schneller.'],
+    mining_fatigue: ['Abbau-Müdigkeit', 'Du baust langsamer ab.'], strength: ['Stärke', 'Mehr Schaden im Nahkampf.'], instant_health: ['Direktheilung', 'Heilt sofort (wirkt hier immer wieder).'],
+    instant_damage: ['Direktschaden', 'Verursacht sofort Schaden.'], jump_boost: ['Sprungkraft', 'Du springst höher.'], nausea: ['Übelkeit', 'Der Bildschirm wackelt.'],
+    regeneration: ['Regeneration', 'Dein Leben füllt sich nach und nach auf.'], resistance: ['Widerstand', 'Du nimmst weniger Schaden.'], fire_resistance: ['Feuerresistenz', 'Feuer und Lava tun nicht weh.'],
+    water_breathing: ['Wasseratmung', 'Du kannst unter Wasser atmen.'], invisibility: ['Unsichtbarkeit', 'Andere Spieler sehen dich nicht (getragene Rüstung schon).'], blindness: ['Blindheit', 'Du siehst fast nichts.'],
+    night_vision: ['Nachtsicht', 'Du siehst im Dunkeln und unter Wasser.'], hunger: ['Hunger', 'Dein Hunger steigt schneller.'], weakness: ['Schwäche', 'Weniger Schaden im Nahkampf.'], poison: ['Gift', 'Zieht Leben ab (aber nicht bis zum Tod).'],
+    wither: ['Wither', 'Zieht Leben ab, auch bis zum Tod.'], health_boost: ['Lebensschub', 'Mehr maximale Leben.'], absorption: ['Absorption', 'Goldene Extra-Herzen.'], saturation: ['Sättigung', 'Dein Hunger füllt sich auf.'],
+    glowing: ['Leuchten', 'Du wirst durch Wände sichtbar.'], levitation: ['Schweben', 'Du schwebst nach oben.'], luck: ['Glück', 'Bessere Beute.'], unluck: ['Pech', 'Schlechtere Beute.'], slow_falling: ['Sanfter Fall', 'Du fällst langsam und ohne Fallschaden.'],
+    conduit_power: ['Wasserkraft', 'Besser sehen, atmen und abbauen unter Wasser.'], dolphins_grace: ['Delfins Gunst', 'Du schwimmst schneller.'], darkness: ['Dunkelheit', 'Der Bildschirm wird dunkel.'],
+    hero_of_the_village: ['Held des Dorfes', 'Dorfbewohner geben Rabatt.'], bad_omen: ['Unheil', 'Löst einen Überfall in Dörfern aus.'], infested: ['Befall', 'Silberfischchen können aus dir erscheinen.'], oozing: ['Triefen', 'Schleim erscheint, wenn du stirbst.'],
+    weaving: ['Weben', 'Netze erscheinen, wenn du stirbst.'], wind_charged: ['Windgeladen', 'Eine Windböe erscheint, wenn du stirbst.'], raid_omen: ['Überfall-Omen', 'Startet einen Überfall im Dorf.'], trial_omen: ['Prüfungs-Omen', 'Wird zu einem Unheil-Effekt.']
+  };
+  const ATTRS = {
+    max_health: ['Maximale Leben', 'Wie viele Herzen du höchstens hast. 2 Punkte = 1 Herz.'], attack_damage: ['Angriffsschaden', 'Wie viel Schaden du im Nahkampf machst.'],
+    attack_speed: ['Angriffstempo', 'Wie schnell sich der Schlag wieder auflädt.'], movement_speed: ['Lauftempo', 'Normal ist 0,1. Als Prozent: +20 % heißt 20 % schneller.'],
+    armor: ['Rüstung', 'Jeder Punkt ist ein halbes Rüstungssymbol.'], armor_toughness: ['Rüstungszähigkeit', 'Schützt vor starken Schlägen.'], knockback_resistance: ['Rückstoß-Widerstand', '1 bedeutet: kein Rückstoß mehr.'],
+    luck: ['Glück', 'Bessere Beute beim Angeln und aus Truhen.'], scale: ['Größe', 'Wie groß der Spieler ist (1 = normal).'], step_height: ['Stufenhöhe', 'Wie hohe Kanten du ohne Springen hochläufst.'],
+    jump_strength: ['Sprungstärke', 'Wie hoch du springst.'], gravity: ['Schwerkraft', 'Wie schnell du fällst.'], safe_fall_distance: ['Sichere Fallhöhe', 'Bis zu dieser Höhe (in Blöcken) ohne Fallschaden.'],
+    fall_damage_multiplier: ['Fallschaden', 'Faktor für den Fallschaden (0 = keiner).'], block_interaction_range: ['Reichweite (Blöcke)', 'Wie weit du Blöcke erreichst.'], entity_interaction_range: ['Reichweite (Gegner)', 'Wie weit du Gegner triffst.'],
+    mining_efficiency: ['Abbau-Effizienz', 'Wie schnell du Blöcke abbaust.'], submerged_mining_speed: ['Abbau unter Wasser', 'Abbautempo unter Wasser.'], sneaking_speed: ['Schleichtempo', 'Wie schnell du schleichst.'],
+    oxygen_bonus: ['Atemluft', 'Du hältst länger unter Wasser die Luft an.'], water_movement_efficiency: ['Wassertempo', 'Wie gut du dich im Wasser bewegst.'], burning_time: ['Brenndauer', 'Wie lange du brennst (kleiner = kürzer).'],
+    explosion_knockback_resistance: ['Explosions-Rückstoß', 'Schützt vor Rückstoß durch Explosionen.'], movement_efficiency: ['Bewegungs-Effizienz', 'Wie wenig dich Hindernisse (z. B. Spinnweben) bremsen.'], attack_knockback: ['Rückstoß beim Schlagen', 'Wie stark du Gegner wegschlägst.'],
+    flying_speed: ['Fluggeschwindigkeit', 'Wie schnell du fliegst.'], sweeping_damage_ratio: ['Schwungschaden', 'Wie stark der Schwung-Angriff ist.'], follow_range: ['Verfolgungsreichweite', 'Wie weit Mobs dich bemerken.'],
+    tempt_range: ['Lockreichweite', 'Wie weit Tiere dein Futter bemerken.'], spawn_reinforcements: ['Verstärkung', 'Chance, dass Zombies Verstärkung rufen.']
+  };
+  const PARTS = {
+    flame: ['Flamme', 'Kleine Flammen.'], heart: ['Herz', 'Rote Herzen.'], happy_villager: ['Grüne Funken', 'Wie beim Knochenmehl.'], angry_villager: ['Wolke (wütend)', 'Wie ein wütender Dorfbewohner.'], crit: ['Krit-Funken', 'Wie bei einem kritischen Treffer.'],
+    enchant: ['Zauber-Runen', 'Wie am Zaubertisch.'], portal: ['Portal', 'Lila Portal-Partikel.'], smoke: ['Rauch', 'Grauer Rauch.'], large_smoke: ['Dicker Rauch', 'Großer Rauch.'], soul_fire_flame: ['Seelenfeuer', 'Blaue Flammen.'],
+    end_rod: ['Endstab', 'Weiße Funken.'], totem_of_undying: ['Totem', 'Wie beim Totem der Unsterblichkeit.'], note: ['Note', 'Bunte Noten.'], cloud: ['Wolke', 'Weiße Wolken.'], firework: ['Feuerwerk', 'Funken wie bei einer Rakete.'],
+    witch: ['Hexe', 'Lila Funken.'], dripping_water: ['Wassertropfen', 'Tropfen.'], dripping_lava: ['Lavatropfen', 'Tropfen aus Lava.'], snowflake: ['Schneeflocke', 'Schneeflocken.'], glow: ['Leuchten', 'Leuchtende Punkte.'], electric_spark: ['Elektrofunke', 'Blaue Funken.']
+  };
+  const short = n => (n || '').replace(/^(generic|player)\./, '');
+  const dict = kind => kind === 'EFFECT' ? EFFECTS : kind === 'ATTRIBUTE' ? ATTRS : PARTS;
+  const nameOf = (kind, n) => { const e = dict(kind)[short(n)]; return e ? e[0] : pretty(short(n)).replace(/\b\w/g, c => c.toUpperCase()); };
+  const descOf = (kind, n) => { const e = dict(kind)[short(n)]; return e ? e[1] : ''; };
+  const kindLabel = k => L(KIND[k].de, KIND[k].en);
+  const whenLabel = w => w === 'WORN' ? L('getragen', 'worn') : L('in der Hand', 'held');
+
+  /** Die Fähigkeit als ganzer Satz: "Wer das trägt, bekommt Geschwindigkeit II." */
+  function sentence(a) {
+    const who = a.when === 'WORN' ? L('Wer das trägt, ', 'Whoever wears it ') : L('Wer das in der Hand hält, ', 'Whoever holds it ');
+    const nm = a.name ? nameOf(a.kind, a.name) : '…';
+    if (a.kind === 'EFFECT') return who + L('bekommt ', 'gets ') + nm + ' ' + (ROMAN[a.level] || a.level) + '.';
+    if (a.kind === 'PARTICLE') return who + L('wird von ' + nm + '-Partikeln umgeben (' + a.level + ' pro Sekunde).', 'is surrounded by ' + nm + ' particles (' + a.level + ' per second).');
+    const sign = a.amount >= 0 ? '+' : '';
+    return who + L('hat ', 'gets ') + (a.multiply ? sign + Math.round(a.amount * 1000) / 10 + ' %' : sign + a.amount) + ' ' + nm + '.';
+  }
+
+  function abilityList(en) {
+    if (!en.abilities.length) return h('div', { class: 'tp-empty' }, L('Noch keine Fähigkeiten. Wähle unten aus, was dieser Gegenstand können soll.', 'No abilities yet. Choose below what this item should do.'));
+    return h('div', { class: 'tp-ablist' }, en.abilities.map((a, i) => help(h('div', { class: 'tp-ab' },
+      h('span', { class: 'tp-ab-ic' }, KIND[a.kind].icon),
+      h('div', { class: 'grow' }, h('div', { class: 'tp-ab-t' }, sentence(a)), h('div', { class: 'sub' }, kindLabel(a.kind) + ' · ' + whenLabel(a.when) + ' · ' + a.name)),
+      h('button', { class: 'px-btn small danger', title: L('Entfernen', 'Remove'), onclick: async () => { if (await call('entries/' + en.id + '/abilities/' + (i + 1), 'DELETE')) render(); } }, '×')),
+      nameOf(a.kind, a.name), descOf(a.kind, a.name) || kindLabel(a.kind))));
+  }
+
+  /** Neue Fähigkeit in vier Schritten: Art, Wann, Was, Wie stark. Unten steht immer, was am Ende im Spiel passiert. */
+  function abilityWizard(en) {
+    const d = { kind: 'EFFECT', when: 'WORN', name: '', level: 1, amount: 1, multiply: false };
+    const search = h('input', { type: 'search', placeholder: L('Suchen …', 'Search …'), oninput: () => drawChips() });
+    const chipsBox = h('div', { class: 'tp-chips' });
+    const box = h('div', { class: 'card tp-wiz' });
+    const prev = h('div', { class: 'tp-prev' });
+    const add = h('button', { class: 'px-btn primary', onclick: async () => {
+      if (await call('entries/' + en.id + '/abilities', 'POST', { kind: d.kind, when: d.when, name: d.name, level: d.level, amount: d.amount, multiply: d.multiply }, L('Fähigkeit hinzugefügt', 'Ability added'))) render();
+    } }, '+ ' + L('Fähigkeit hinzufügen', 'Add ability'));
+    const pool = () => d.kind === 'EFFECT' ? meta.effects : d.kind === 'ATTRIBUTE' ? meta.attributes : meta.particles;
+    const upd = () => { prev.textContent = d.name ? sentence(d) : L('Wähle bei Schritt 3 aus, was passieren soll.', 'Pick what should happen at step 3.'); prev.className = 'tp-prev' + (d.name ? '' : ' warn'); add.disabled = !d.name; };
+    function drawChips() {
+      const q = search.value.trim().toLowerCase();
+      const list = pool().filter(n => !q || n.includes(q) || nameOf(d.kind, n).toLowerCase().includes(q)).sort((a, b) => nameOf(d.kind, a).localeCompare(nameOf(d.kind, b), 'de'));
+      chipsBox.replaceChildren(...[...list.map(n => help(h('button', { class: 'tp-chip' + (d.name === n ? ' on' : ''), onclick: () => { d.name = n; draw(); } }, nameOf(d.kind, n)),
+        nameOf(d.kind, n) + ' (' + short(n) + ')', descOf(d.kind, n) || L('Minecraft-Name: ', 'Minecraft name: ') + n)), ...(list.length ? [] : [h('div', { class: 'sub' }, L('Nichts gefunden.', 'Nothing found.'))])]);
+    }
+    const step = (n, title, ...kids) => h('div', { class: 'tp-step' }, h('div', { class: 'tp-step-h' }, h('span', { class: 'tp-num' }, n), title), ...kids);
+    function draw() {
+      const kinds = h('div', { class: 'tp-kinds' }, Object.entries(KIND).map(([k, v]) => help(h('button', { class: 'tp-kind' + (d.kind === k ? ' on' : ''),
+        onclick: () => { d.kind = k; d.name = ''; d.level = 1; d.amount = 1; d.multiply = false; search.value = ''; draw(); } },
+        h('span', { class: 'ic' }, v.icon), h('b', {}, L(v.de, v.en)), h('small', {}, L(v.descDe, v.descEn))), L(v.de, v.en), L(v.helpDe, v.helpEn))));
+      const whens = h('div', { class: 'tp-seg' }, [
+        ['WORN', '🛡 ' + L('Getragen', 'Worn'), L('Wirkt, solange der Gegenstand auf einem Rüstungsplatz getragen wird (Helm, Brustplatte, Hose oder Schuhe).', 'Applies while the item is worn in an armor slot (helmet, chestplate, leggings or boots).')],
+        ['HELD', '✋ ' + L('In der Hand', 'Held'), L('Wirkt, solange der Gegenstand in der Haupt- oder Nebenhand gehalten wird.', 'Applies while the item is held in the main or off hand.')]
+      ].map(([k, l, hd]) => help(h('button', { class: 'tp-segb' + (d.when === k ? ' on' : ''), onclick: () => { d.when = k; draw(); } }, l), l, hd)));
+      let strength;
+      if (d.kind === 'ATTRIBUTE') {
+        const amount = h('input', { type: 'number', step: d.multiply ? '0.05' : '0.5', value: d.amount, oninput: ev => { d.amount = +ev.target.value; upd(); } });
+        strength = h('div', {},
+          h('div', { class: 'tp-seg' }, [
+            [false, L('Fester Wert', 'Flat value'), L('Wird einfach dazugerechnet, z. B. +4 bei Leben sind zwei zusätzliche Herzen.', 'Simply added, e.g. +4 on health is two extra hearts.')],
+            [true, L('Prozent', 'Percent'), L('Ändert den Wert um einen Anteil, z. B. 0,2 sind +20 % (0,1 = 10 %).', 'Changes the value by a share, e.g. 0.2 is +20 % (0.1 = 10 %).')]
+          ].map(([m, l, hd]) => help(h('button', { class: 'tp-segb' + (d.multiply === m ? ' on' : ''), onclick: () => { d.multiply = m; draw(); } }, l), l, hd))),
+          help(h('div', { class: 'tp-amount' }, amount, h('span', { class: 'sub' }, d.multiply ? L('0,1 = 10 %. Erlaubt: −' + meta.maxAmount + ' bis ' + meta.maxAmount, '0.1 = 10 %. Allowed: −' + meta.maxAmount + ' to ' + meta.maxAmount) : L('Erlaubt: −' + meta.maxAmount + ' bis ' + meta.maxAmount + ' (negativ macht schwächer)', 'Allowed: −' + meta.maxAmount + ' to ' + meta.maxAmount + ' (negative weakens)'))),
+            L('Wert', 'Amount'), L('Wie stark sich der Wert ändert. Negative Zahlen machen den Wert kleiner. 0 ändert nichts und ist nicht erlaubt.', 'How much the stat changes. Negative numbers lower it. 0 changes nothing and is not allowed.')));
+      } else {
+        const max = d.kind === 'EFFECT' ? meta.maxLevel : meta.maxParticles;
+        const val = h('b', { class: 'tp-lv' }, d.kind === 'EFFECT' ? ROMAN[d.level] || d.level : d.level);
+        const slider = h('input', { type: 'range', min: 1, max, value: d.level, oninput: ev => { d.level = +ev.target.value; val.textContent = d.kind === 'EFFECT' ? ROMAN[d.level] || d.level : d.level; upd(); } });
+        strength = help(h('div', { class: 'tp-amount' }, slider, val, h('span', { class: 'sub' }, d.kind === 'EFFECT' ? L('Stufe (I = normal, höher = stärker)', 'Level (I = normal, higher = stronger)') : L('Partikel pro Sekunde', 'Particles per second'))),
+          d.kind === 'EFFECT' ? L('Stufe', 'Level') : L('Anzahl', 'Count'),
+          d.kind === 'EFFECT' ? L('Wie stark der Effekt ist. Stufe I ist die normale Stärke eines Tranks, jede weitere macht ihn kräftiger (bis ' + meta.maxLevel + ').', 'How strong the effect is. Level I is the normal strength of a potion, each step makes it stronger (up to ' + meta.maxLevel + ').')
+            : L('Wie viele Partikel pro Sekunde erscheinen (1 bis ' + meta.maxParticles + '). Mehr sieht dichter aus, kann bei vielen Spielern aber ruckeln.', 'How many particles appear per second (1 to ' + meta.maxParticles + '). More looks denser but may lag with many players.'));
+      }
+      box.replaceChildren(
+        h('h3', { style: 'margin:0 0 10px' }, L('Neue Fähigkeit', 'New ability')),
+        step(1, L('Was für eine Fähigkeit?', 'What kind of ability?'), kinds),
+        step(2, L('Wann soll sie wirken?', 'When should it apply?'), whens),
+        step(3, d.kind === 'EFFECT' ? L('Welcher Effekt?', 'Which effect?') : d.kind === 'ATTRIBUTE' ? L('Welcher Wert?', 'Which stat?') : L('Welcher Partikel?', 'Which particle?'),
+          help(search, L('Suchen', 'Search'), L('Tippe einen Teil des Namens, die Liste darunter wird kürzer. Fahre mit der Maus über einen Eintrag, dann steht dort, was er macht.', 'Type part of the name to shorten the list. Hover an entry to see what it does.')), chipsBox),
+        step(4, L('Wie stark?', 'How strong?'), strength),
+        h('div', { class: 'tp-sum' }, h('div', { class: 'sub' }, L('So wirkt es im Spiel:', 'In game:')), prev, add));
+      drawChips(); upd();
+    }
+    draw();
+    return box;
   }
 
   function detail(en) {
     const dupId = h('input', { placeholder: 'neue_kennung' }), dupName = h('input', { placeholder: L('neuer Name', 'new name') });
-    return h('div', { class: 'card' },
-      h('div', { class: 'row' }, h('img', { src: texUrl(en.id), style: 'width:96px;height:96px;image-rendering:pixelated' }), h('div', { class: 'grow' }, h('h2', { style: 'margin:0' }, en.id), h('div', { class: 'sub' }, en.material + ' – "' + en.name + '"')),
+    return h('div', { class: 'card tp-pop' },
+      h('div', { class: 'row' }, h('img', { src: texUrl(en.id), class: 'tp-vbig' }),
+        h('div', { class: 'grow' }, h('h2', { style: 'margin:0' }, en.name), h('div', { class: 'sub' }, L('Basis: ', 'Base: ') + pretty(en.material.toLowerCase()) + ' · ' + L('Kennung: ', 'Id: ') + en.id), h('div', { class: 'sub' }, en.enabled ? L('● aktiv', '● active') : L('○ ausgeschaltet', '○ disabled'))),
         h('button', { class: 'px-btn small ghost', onclick: () => { open = null; render(); } }, '×')),
       h('div', { class: 'row', style: 'margin-top:12px' },
-        h('button', { class: 'px-btn', onclick: () => startEntryEditor(en.id) }, L('Textur bearbeiten', 'Edit texture')),
-        h('button', { class: 'px-btn', onclick: async () => { if (await call('entries/' + en.id + '/enabled', 'POST', { enabled: !en.enabled })) render(); } }, en.enabled ? L('Ausschalten', 'Disable') : L('Einschalten', 'Enable')),
-        h('button', { class: 'px-btn danger', onclick: async () => { if (await ctx.confirm(L('Eintrag ins Archiv verschieben? Du kannst ihn zurueckholen.', 'Move entry to the archive? You can bring it back.'))) { if (await call('entries/' + en.id, 'DELETE', undefined, L('Im Archiv', 'Archived'))) { open = null; render(); } } } }, L('Loeschen (Archiv)', 'Delete (archive)'))),
-      h('h2', {}, L('Duplizieren', 'Duplicate')), h('div', { class: 'row' }, dupId, dupName, h('button', { class: 'px-btn', onclick: async () => { if (await call('entries/' + en.id + '/duplicate', 'POST', { id: dupId.value, name: dupName.value }, L('Dupliziert', 'Duplicated'))) { open = dupId.value.toLowerCase(); render(); } } }, L('Duplizieren', 'Duplicate'))),
-      h('h2', {}, L('Faehigkeiten', 'Abilities') + ' (' + en.abilities.length + '/' + meta.maxAbilities + ')'),
-      en.abilities.length ? h('table', {}, en.abilities.map((a, i) => h('tr', {}, h('td', {}, i + 1), h('td', {}, a.text), h('td', {}, h('button', { class: 'px-btn small danger', onclick: async () => { if (await call('entries/' + en.id + '/abilities/' + (i + 1), 'DELETE')) render(); } }, '×'))))) : h('div', { class: 'sub' }, L('Keine.', 'None.')),
-      en.abilities.length < meta.maxAbilities ? abilityForm(en) : null);
+        help(h('button', { class: 'px-btn', onclick: () => startEntryEditor(en.id) }, '✎ ' + L('Textur bearbeiten', 'Edit texture')), L('Textur bearbeiten', 'Edit texture'), L('Öffnet den Pixel-Editor mit dem Bild dieses Gegenstands.', 'Opens the pixel editor with this item’s image.')),
+        help(h('button', { class: 'px-btn', onclick: async () => { if (await call('entries/' + en.id + '/enabled', 'POST', { enabled: !en.enabled })) render(); } }, '⏻ ' + (en.enabled ? L('Ausschalten', 'Disable') : L('Einschalten', 'Enable'))),
+          en.enabled ? L('Ausschalten', 'Disable') : L('Einschalten', 'Enable'), L('Ausgeschaltet verliert der Gegenstand Textur und Fähigkeiten im Spiel, der Eintrag bleibt aber gespeichert.', 'When disabled the item loses its texture and abilities in game, but the entry stays saved.')),
+        help(h('button', { class: 'px-btn danger', onclick: async () => { if (await ctx.confirm(L('Eintrag ins Archiv verschieben? Du kannst ihn zurueckholen.', 'Move entry to the archive? You can bring it back.'))) { if (await call('entries/' + en.id, 'DELETE', undefined, L('Im Archiv', 'Archived'))) { open = null; render(); } } } }, '⌫ ' + L('Ins Archiv', 'Archive')),
+          L('Ins Archiv', 'Archive'), L('Nimmt den Eintrag aus dem Spiel. Im Reiter Archiv kannst du ihn jederzeit zurückholen.', 'Takes the entry out of the game. You can bring it back from the archive tab any time.'))),
+      h('h2', {}, L('Fähigkeiten', 'Abilities') + ' (' + en.abilities.length + '/' + meta.maxAbilities + ')'),
+      abilityList(en),
+      en.abilities.length < meta.maxAbilities ? abilityWizard(en) : h('div', { class: 'sub' }, L('Mehr Fähigkeiten sind nicht möglich.', 'No more abilities possible.')),
+      h('details', { class: 'tp-more' }, h('summary', {}, L('Duplizieren', 'Duplicate')),
+        h('p', { class: 'sub' }, L('Legt eine Kopie mit gleicher Textur und Fähigkeiten an, z. B. für eine zweite Farbe.', 'Creates a copy with the same texture and abilities, e.g. for a second variant.')),
+        h('div', { class: 'row' }, field(L('Neue Kennung', 'New id'), dupId, L('Kennung', 'Id'), L('Interner Name der Kopie (kleine Buchstaben, Zahlen, _), nur einmalig vergeben.', 'Internal name of the copy (lowercase letters, digits, _), must be unique.')),
+          field(L('Neuer Name', 'New name'), dupName, L('Name am Amboss', 'Anvil name'), L('Der Name, den man am Amboss eintippt, um die Kopie zu bekommen. Muss sich vom Original unterscheiden, wenn der Gegenstand gleich ist.', 'The name typed at the anvil to get the copy. Must differ from the original if the item is the same.')),
+          h('button', { class: 'px-btn', onclick: async () => { if (await call('entries/' + en.id + '/duplicate', 'POST', { id: dupId.value, name: dupName.value }, L('Dupliziert', 'Duplicated'))) { open = dupId.value.toLowerCase(); render(); } } }, L('Duplizieren', 'Duplicate')))));
   }
 
   function render() {
