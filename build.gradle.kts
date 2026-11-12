@@ -3,7 +3,7 @@ plugins {
 }
 
 group = "de.peakverse"
-version = "0.1.8"
+version = "0.1.9"
 
 java {
     toolchain.languageVersion = JavaLanguageVersion.of(25)
